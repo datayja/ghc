@@ -130,3 +130,9 @@ EventlogOutput2:
 	"$(TEST_HC)" -eventlog -v0 EventlogOutput.hs
 	./EventlogOutput +RTS -l
 	ls EventlogOutput.eventlog >/dev/null
+
+.PHONY: EventlogOutput_IPE
+EventlogOutput_IPE:
+	"$(TEST_HC)" -debug -finfo-table-map -v0 EventlogOutput.hs
+	./EventlogOutput +RTS -va 2> EventlogOutput_IPE.stderr.log
+	grep "IPE:" EventlogOutput_IPE.stderr.log
