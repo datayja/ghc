@@ -210,6 +210,8 @@ function set_toolchain_paths() {
 function setup() {
   echo "=== TIMINGS ===" > ci-timings
 
+  echo "CABAL_DIR: $CABAL_DIR"
+
   if [ -d "$CABAL_CACHE" ]; then
       info "Extracting cabal cache from $CABAL_CACHE to $CABAL_DIR..."
       mkdir -p "$CABAL_DIR"
