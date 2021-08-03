@@ -235,7 +235,6 @@ import Data.Functor
 import Control.DeepSeq (force)
 import Data.Bifunctor (first)
 import GHC.Data.Maybe
-import GHC.Utils.Trace
 
 {- **********************************************************************
 %*                                                                      *
@@ -1049,7 +1048,7 @@ genModDetails hsc_env old_iface
                    -- the current module in old_iface because it has the
                    -- effect of globalising DFunIds, which fails if the
                    -- current module is in the hsc_type_env var
-                   initIfaceLoadModule hsc_env (mi_module old_iface) (typecheckIface old_iface)
+                  initIfaceLoadModule hsc_env (mi_module old_iface) (typecheckIface old_iface)
     -- Important to do this as now the DFuns are globalised
     -- MP: BIG TODO to link this back to what UpdateIdInfos used to do
     case hsc_type_env_vars hsc_env (mi_module old_iface) of

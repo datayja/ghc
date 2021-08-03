@@ -149,7 +149,6 @@ import Control.Monad.Trans.Reader
 import GHC.Driver.Pipeline.Semaphore
 import GHC.Data.DependentMap
 import qualified Data.Map.Strict as M
-import GHC.Utils.Trace
 import GHC.Types.TypeEnv
 import Control.Monad.Trans.State.Lazy
 import Control.Monad.Trans.Class

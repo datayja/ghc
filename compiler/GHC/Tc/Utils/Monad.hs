@@ -2055,7 +2055,8 @@ mkIfLclEnv mod loc boot
                                 if_nsubst  = Nothing,
                                 if_implicits_env = Nothing,
                                 if_tv_env  = emptyFsEnv,
-                                if_id_env  = emptyFsEnv }
+                                if_id_env  = emptyFsEnv
+                                }
 
 -- | Run an 'IfG' (top-level interface monad) computation inside an existing
 -- 'TcRn' (typecheck-renaming monad) computation by initializing an 'IfGblEnv'
@@ -2064,6 +2065,7 @@ initIfaceTcRn :: IfG a -> TcRn a
 initIfaceTcRn thing_inside
   = do  { tcg_env <- getGblEnv
         ; hsc_env <- getTopEnv
+        ; this_mod <- tcg_mod <$> getGblEnv
           -- bangs to avoid leaking the envs (#19356)
         ; let !home_unit = hsc_home_unit hsc_env
               -- When we are instantiating a signature, we DEFINITELY
@@ -2073,8 +2075,9 @@ initIfaceTcRn thing_inside
                             if_doc = text "initIfaceTcRn",
                             if_rec_types =
                                 if is_instantiate
-                                    then const Nothing
-                                    else fmap (fmap readTcRef) (tcg_type_env_var tcg_env) }
+                                    then return Nothing
+                                    else fmap readTcRef <$> tcg_type_env_var tcg_env
+                            , if_type_env = readTcRef <$> tcg_type_env_var tcg_env this_mod }
                          }
         ; setEnvs (if_env, ()) thing_inside }
 
@@ -2086,7 +2089,8 @@ initIfaceLoad :: HscEnv -> IfG a -> IO a
 initIfaceLoad hsc_env do_this
  = do let gbl_env = IfGblEnv {
                         if_doc = text "initIfaceLoad",
-                        if_rec_types = const Nothing
+                        if_rec_types = const Nothing,
+                        if_type_env  = Nothing
                     }
       initTcRnIf 'i' hsc_env gbl_env () do_this
 
@@ -2098,7 +2102,8 @@ initIfaceLoadModule :: HscEnv -> Module -> IfG a -> IO a
 initIfaceLoadModule hsc_env this_mod do_this
  = do let gbl_env = IfGblEnv {
                         if_doc = text "initIfaceLoadModule",
-                        if_rec_types = \that_mod -> if that_mod == this_mod then Nothing else (fmap readTcRef) (hsc_type_env_vars hsc_env that_mod)
+                        if_rec_types = \that_mod -> if that_mod == this_mod then Nothing else (fmap readTcRef) (hsc_type_env_vars hsc_env that_mod),
+                        if_type_env  =  (fmap readTcRef) (hsc_type_env_vars hsc_env this_mod)
                     }
       initTcRnIf 'i' hsc_env gbl_env () do_this
 
@@ -2108,7 +2113,8 @@ initIfaceCheck :: SDoc -> HscEnv -> IfG a -> IO a
 initIfaceCheck doc hsc_env do_this
  = do let gbl_env = IfGblEnv {
                         if_doc = text "initIfaceCheck" <+> doc,
-                        if_rec_types = fmap (fmap readTcRef) (hsc_type_env_vars hsc_env)
+                        if_rec_types = fmap (fmap readTcRef) (hsc_type_env_vars hsc_env),
+                        if_type_env  = Nothing
                     }
       initTcRnIf 'i' hsc_env gbl_env () do_this
 

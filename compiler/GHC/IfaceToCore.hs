@@ -1778,15 +1778,10 @@ tcPragExpr is_compulsory toplvl name expr
     get_in_scope :: IfL VarSet -- Totally disgusting; but just for linting
     get_in_scope
         = do { (gbl_env, lcl_env) <- getEnvs
-        {-
-             ; rec_ids <- do
-                let get_type_envs = moduleEnvElts (if_rec_types gbl_env)
-                envs <- traverse (setLclEnv ()) get_type_envs
-                return (concatMap typeEnvIds envs)
-                -}
+             ; top_level_vars <- maybe (return []) (fmap typeEnvIds . setLclEnv ()) (if_type_env gbl_env)
              ; return (bindingsVars (if_tv_env lcl_env) `unionVarSet`
-                       bindingsVars (if_id_env lcl_env)) } -- `unionVarSet`
-                    --   mkVarSet rec_ids) }
+                       bindingsVars (if_id_env lcl_env) `unionVarSet`
+                       mkVarSet top_level_vars) }
 
     bindingsVars :: FastStringEnv Var -> VarSet
     bindingsVars ufm = mkVarSet $ nonDetEltsUFM ufm

@@ -91,7 +91,6 @@ import Control.Monad
 import Data.List (find)
 
 import {-# SOURCE #-} GHC.Tc.Module
-import GHC.Utils.Trace
 
 fixityMisMatch :: TyThing -> Fixity -> Fixity -> TcRnMessage
 fixityMisMatch real_thing real_fixity sig_fixity =
@@ -284,7 +283,7 @@ findExtraSigImports' :: HscEnv
                      -> ModuleName
                      -> IO (UniqDSet ModuleName)
 findExtraSigImports' hsc_env HsigFile modname =
-    fmap unionManyUniqDSets (forM reqs $ \m@(Module iuid mod_name) ->
+    fmap unionManyUniqDSets (forM reqs $ \(Module iuid mod_name) ->
         (initIfaceLoad hsc_env
             . withException ctx
             $ moduleFreeHolesPrecise (text "findExtraSigImports")
