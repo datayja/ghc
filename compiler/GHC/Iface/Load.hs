@@ -531,7 +531,7 @@ loadInterface doc_str mod from
                               }
                }
 
-        ; let bad_boot = mi_boot iface == IsBoot && elemModuleEnv mod (if_rec_types gbl_env)
+        ; let bad_boot = mi_boot iface == IsBoot && isJust (if_rec_types gbl_env mod)
                             -- Warn against an EPS-updating import
                             -- of one's own boot file! (one-shot only)
                             -- See Note [Loading your own hi-boot file]

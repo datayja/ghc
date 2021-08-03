@@ -694,7 +694,7 @@ runHscPhase pipe_env hsc_env0 input_fn src_flavour = do
   -- files. See GHC.Tc.Utils.TcGblEnv.tcg_type_env_var.
   -- See also Note [hsc_type_env_var hack]
   type_env_var <- newIORef emptyNameEnv
-  let plugin_hsc_env = plugin_hsc_env' { hsc_type_env_vars = mkModuleEnv [(mod, type_env_var)] }
+  let plugin_hsc_env = plugin_hsc_env' { hsc_type_env_vars = lookupModuleEnv (mkModuleEnv [(mod, type_env_var)]) }
 
   status <- hscRecompStatus (Just msg) plugin_hsc_env mod_summary
                         Nothing Nothing (1, 1)

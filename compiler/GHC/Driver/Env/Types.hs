@@ -76,7 +76,7 @@ data HscEnv
         hsc_FC   :: {-# UNPACK #-} !FinderCache,
                 -- ^ The cached result of performing finding in the file system
 
-        hsc_type_env_vars :: ModuleEnv (IORef TypeEnv)
+        hsc_type_env_vars :: Module -> Maybe (IORef TypeEnv)
                 -- ^ Used for one-shot compilation only, to initialise
                 -- the 'IfGblEnv'. See 'GHC.Tc.Utils.tcg_type_env_var' for
                 -- 'GHC.Tc.Utils.TcGblEnv'.  See also Note [hsc_type_env_var hack]

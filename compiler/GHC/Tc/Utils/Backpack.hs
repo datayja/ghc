@@ -284,7 +284,7 @@ findExtraSigImports' :: HscEnv
                      -> ModuleName
                      -> IO (UniqDSet ModuleName)
 findExtraSigImports' hsc_env HsigFile modname =
-    fmap unionManyUniqDSets (forM reqs $ \(Module iuid mod_name) ->
+    fmap unionManyUniqDSets (forM reqs $ \m@(Module iuid mod_name) ->
         (initIfaceLoad hsc_env
             . withException ctx
             $ moduleFreeHolesPrecise (text "findExtraSigImports")
@@ -950,7 +950,6 @@ tcRnInstantiateSignature hsc_env this_mod real_loc =
    withTiming logger
               (text "Signature instantiation"<+>brackets (ppr this_mod))
               (const ()) $ do
-   pprTraceM "hsig" (ppr (moduleName this_mod) $$ ppr (moduleUnit this_mod))
    initTc hsc_env HsigFile False this_mod real_loc $ instantiateSignature
   where
    logger = hsc_logger hsc_env

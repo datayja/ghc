@@ -257,7 +257,7 @@ newHscEnv dflags = do
                   ,  hsc_IC             = emptyInteractiveContext dflags
                   ,  hsc_NC             = nc_var
                   ,  hsc_FC             = fc_var
-                  ,  hsc_type_env_vars  = emptyModuleEnv
+                  ,  hsc_type_env_vars  = const Nothing
                   ,  hsc_interp         = Nothing
                   ,  hsc_unit_env       = unit_env
                   ,  hsc_plugins        = []
@@ -548,7 +548,6 @@ hsc_typecheck keep_rn mod_summary mb_rdr_module = do
          do hpm <- case mb_rdr_module of
                     Just hpm -> return hpm
                     Nothing -> hscParse' mod_summary
-            pprTraceM "before_tc_rn" (ppr $ moduleUnit $ ms_mod mod_summary)
             tc_result0 <- tcRnModule' mod_summary keep_rn' hpm
             if hsc_src == HsigFile
                 then do (iface, _, _) <- liftIO $ hscSimpleIface hsc_env tc_result0 mod_summary Nothing
@@ -1050,7 +1049,12 @@ genModDetails hsc_env old_iface
                    -- the current module in old_iface because it has the
                    -- effect of globalising DFunIds, which fails if the
                    -- current module is in the hsc_type_env var
-                   initIfaceLoad hsc_env (typecheckIface old_iface)
+                   initIfaceLoadModule hsc_env (mi_module old_iface) (typecheckIface old_iface)
+    -- Important to do this as now the DFuns are globalised
+    -- MP: BIG TODO to link this back to what UpdateIdInfos used to do
+    case hsc_type_env_vars hsc_env (mi_module old_iface) of
+      Nothing -> return ()
+      Just te_var -> writeIORef te_var (md_types new_details)
     dumpIfaceStats hsc_env
     return new_details
 

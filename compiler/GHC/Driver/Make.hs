@@ -92,7 +92,6 @@ import GHC.Data.StringBuffer
 import qualified GHC.LanguageExtensions as LangExt
 
 import GHC.Utils.Exception ( AsyncException(..), evaluate )
-import GHC.Utils.Monad     ( allM, MonadIO )
 import GHC.Utils.Outputable
 import GHC.Utils.Panic
 import GHC.Utils.Panic.Plain
@@ -980,20 +979,18 @@ createBuildMap deps_map plan = evalStateT (buildLoop plan) (BuildLoopState M.emp
       home_mod_map <- getBuildMap
       -- 1. Get the transitive dependencies of this module, by looking up in the dependency map
       let trans_deps = expectJust "build_module" $ Map.lookup (mkNodeKey mod) deps_map
-      pprTraceM "build mod" (ppr mod $$ ppr trans_deps)
       -- Set the default way to build this node, not in a loop here
       let default_action = useMGN mod
       setModulePipeline (mkNodeKey mod) (text "N") default_action
       -- Get what the deps currently refer to
       let doc_build_deps = catMaybes $ map (flip M.lookup home_mod_map) trans_deps
           build_deps = map snd doc_build_deps
-      lq <- liftIO newLogQueue
+      lq <- liftIO (newLogQueue mod_idx)
       return $ NodeBuildInfo ((mod_idx, n_mods)) (mkNodeKey mod) knot_var default_action (process_deps build_deps) lq
 
 
     tcLoop :: [ModuleGraphNode] ->  BuildM [NodeBuildInfo]
     tcLoop ms = do
-      pprTraceM "tc_loop" (ppr ms)
       let ms_mods = mapMaybe (\case InstantiationNode {} -> Nothing; ModuleNode ems -> Just (ms_mod (emsModSummary ems))) ms
       knot_var <- liftIO $ mkModuleEnv <$> mapM (\m -> (m,) <$> newIORef emptyNameEnv) ms_mods
 
@@ -1040,7 +1037,6 @@ createBuildMap deps_map plan = evalStateT (buildLoop plan) (BuildLoopState M.emp
         ResolvedCycle ms -> do
 --          pprTraceM "CYCLE" (ppr ms)
           pipes <- tcLoop ms
-          pprTraceM "pipes" (ppr $ length pipes)
           (cycle, graph) <- buildLoop plans
 
           return (cycle, pipes ++ graph)
@@ -2381,7 +2377,7 @@ addDepsToHscEnv ::  [HomeModInfo] -> HscEnv -> HscEnv
 addDepsToHscEnv deps hsc_env =
   hscUpdateHPT (const $ listHMIToHpt deps) hsc_env
 
-wrapAction :: MonadIO m => HscEnv -> IO a -> MaybeT m a
+wrapAction :: HscEnv -> IO a -> IO (Maybe a)
 wrapAction hsc_env k = do
               let lcl_logger = hsc_logger hsc_env
                   lcl_dynflags = hsc_dflags hsc_env
@@ -2389,14 +2385,15 @@ wrapAction hsc_env k = do
               -- MP: It is a bit strange how prettyPrintGhcErrors handles some errors but then we handle
               -- SourceError and ThreadKilled differently directly below. TODO: Refactor to use `catches`
               -- directly
-              mres <-
-                liftIO $ MC.try $ prettyPrintGhcErrors lcl_logger $ k
-              MaybeT $ liftIO $ case mres of
-                Right res -> return $ Just res
+              mres <- MC.try $ liftIO $ prettyPrintGhcErrors lcl_logger $ k
+              case mres of
+                Right res -> do
+                  return $ Just res
                 Left exc -> do
                     case fromException exc of
                       Just (err :: SourceError)
-                        -> logg err
+                        -> do
+                          logg err
                       Nothing -> case fromException exc of
                                     Just ThreadKilled -> return ()
                                     -- Don't print ThreadKilled exceptions: they are used
@@ -2415,14 +2412,15 @@ actionInterpret fa =
       let nbi = expectJust "build_module" $ Map.lookup (NodeKey_Unit ui) m_map
           (k, n) = nk nbi
           lq = node_log_queue nbi
-      deps <- unwrap (build_deps nbi)
       hsc_env <- asks hsc_env
-      -- Output of the logger is mediated by a central worker to
-      -- avoid output interleaving
-      let lcl_logger = pushLogHook (const (parLogAction lq)) (hsc_logger hsc_env)
-      let lcl_hsc_env = addDepsToHscEnv deps hsc_env { hsc_logger = lcl_logger }
-      lift $ wrapAction lcl_hsc_env $ upsweep_inst lcl_hsc_env (Just batchMsg) k n ui
-        `MC.finally` finishLogQueue lq
+      flip MC.finally (liftIO $ finishLogQueue lq) $ do
+        deps <- unwrap (build_deps nbi)
+        -- Output of the logger is mediated by a central worker to
+        -- avoid output interleaving
+        let lcl_logger = pushLogHook (const (parLogAction lq)) (hsc_logger hsc_env)
+        let lcl_hsc_env = addDepsToHscEnv deps hsc_env { hsc_logger = lcl_logger }
+        res <- liftIO $ (wrapAction lcl_hsc_env $ upsweep_inst lcl_hsc_env (Just batchMsg) k n ui)
+        lift $ MaybeT (return res)
     Make_CompileModule  mod -> do
       MakeEnv{..} <- ask
       let node_key = (NodeKey_Module $ mkHomeBuildModule0 mod)
@@ -2435,27 +2433,33 @@ actionInterpret fa =
 
       knot_var <- liftIO $ maybe (mkModuleEnv .  (:[]) . (mk_mod ,) <$> newIORef emptyTypeEnv) return (build_node_var nbi)
 
-      deps <- unwrap (build_deps nbi)
-      let -- Use the cached DynFlags which includes OPTIONS_GHC pragmas
-          lcl_dynflags = ms_hspp_opts mod
-          lcl_logger =
-            -- Apply local log actions to the logger
-            flip setLogFlags (initLogFlags lcl_dynflags) $
-            pushLogHook (const (parLogAction lq)) (hsc_logger hsc_env)
-      let lcl_hsc_env =
-              -- Localise the logger to use the cached flags
-              addDepsToHscEnv deps $
-              hsc_env { hsc_logger = lcl_logger
-                      , hsc_dflags = lcl_dynflags
-                      , hsc_type_env_vars = knot_var }
-      lift $ wrapAction lcl_hsc_env $ upsweep_mod lcl_hsc_env (Just batchMsg) old_hpt mod k n -- k n
-        `MC.finally` finishLogQueue lq
+      flip MC.finally (liftIO $ finishLogQueue lq) $ do
+        deps <- unwrap (build_deps nbi)
+        let -- Use the cached DynFlags which includes OPTIONS_GHC pragmas
+            lcl_dynflags = ms_hspp_opts mod
+            lcl_logger =
+              -- Apply local log actions to the logger
+              flip setLogFlags (initLogFlags lcl_dynflags) $
+              pushLogHook (const (parLogAction lq)) (hsc_logger hsc_env)
+        let lcl_hsc_env =
+                -- Localise the logger to use the cached flags
+                addDepsToHscEnv deps $
+                hsc_env { hsc_logger = lcl_logger
+                        , hsc_dflags = lcl_dynflags
+                        , hsc_type_env_vars = lookupModuleEnv knot_var }
+        res <- liftIO $ (wrapAction lcl_hsc_env $ upsweep_mod lcl_hsc_env (Just batchMsg) old_hpt mod k n) -- k n
+        lift $ MaybeT (return res)
     Make_TypecheckLoop knot_var nk deps -> do
       hsc_env <- asks hsc_env
       other_deps <- process_deps deps
-      hmis <- process_deps (map useMGN nk)
-      let lcl_hsc_env = addDepsToHscEnv other_deps $ hsc_env { hsc_type_env_vars = knot_var }
-      liftIO $ map snd <$> typecheckLoop lcl_hsc_env hmis
+      env <- ask
+      hmis <- liftIO $ sequence $ map (runMaybeT . flip runReaderT env . useMGN) nk
+      lift $ MaybeT $ case sequence hmis of
+        Nothing -> return Nothing
+        Just hmis -> do
+          let hmis' = catMaybes hmis
+          let lcl_hsc_env = addDepsToHscEnv other_deps $ hsc_env { hsc_type_env_vars = lookupModuleEnv knot_var }
+          liftIO $ Just . map snd <$> typecheckLoop lcl_hsc_env hmis'
 
 useMGN :: TPipelineClass MakeAction p => ModuleGraphNode -> p (Maybe HomeModInfo)
 useMGN (InstantiationNode x) = const Nothing <$> use (Make_TypecheckInstantiatedUnit x)
@@ -2516,9 +2520,10 @@ cachedRunModPipeline n_jobs orig_hsc_env old_hpt pipelines = do
           (readMVar action_map >>= killAllActions)
           wait_log_thread
 
-  let run_pipeline :: WrappedMakePipeline a -> Concurrently (Maybe a)
-      run_pipeline (WrappedPipeline p) =
-        runMaybeT (runReaderT p (MakeEnv thread_safe_hsc_env old_hpt deps_map action_map))
+  let run_pipeline :: WrappedMakePipeline a -> IO (Maybe a)
+      run_pipeline (WrappedPipeline p) = do
+        r <- runMaybeT (runReaderT p (MakeEnv thread_safe_hsc_env old_hpt deps_map action_map))
+        return r
 
   MC.bracket updNumCapabilities resetNumCapabilities $ \_ ->
-    runConcurrently $ traverse run_pipeline all_pipelines
+    runConcurrently $ traverse (Concurrently . run_pipeline) all_pipelines

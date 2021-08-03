@@ -13,6 +13,9 @@ import GHC.Utils.Logger
 import qualified Control.Monad.Catch as MC
 import GHC.Utils.Outputable
 import GHC.Utils.Trace
+import Data.Maybe
+import GHC.Exts.Heap.Closures (GenClosure(threadId))
+import Foreign.Safe (Int)
 
 data ActionResult a = ActionResult { actionResult :: MVar (Maybe a) -- Where the result will end up
                                    , killAction   :: IO () -- How to kill the running action
@@ -30,7 +33,7 @@ mkAction name act = do
   -- MP: There used to be a forkIOWithUnmask here, but there was not a corresponding
   -- mask so unmasking was a no-op.
   r <- forkIO $ do
-        r <- act
+        r <- act `MC.onException` (putMVar res_var Nothing)
         putMVar res_var r
   return $ ActionResult res_var (killThread r) name
 
@@ -56,7 +59,7 @@ queueAction act_var key raw_act = do
       Just a -> do
         return (m, waitResult a)
       Nothing -> do
-        pprTraceM "create" (ppr key)
+--        pprTraceM "create" (ppr key)
         wrapped_act <- mkAction (ppr key) raw_act
         return (M.insertDepMap key wrapped_act m, waitResult wrapped_act))
 
@@ -65,27 +68,28 @@ queueAction act_var key raw_act = do
 -- | Each module is given a unique 'LogQueue' to redirect compilation messages
 -- to. A 'Nothing' value contains the result of compilation, and denotes the
 -- end of the message queue.
-data LogQueue = LogQueue !(IORef [Maybe (MessageClass, SrcSpan, SDoc)])
+data LogQueue = LogQueue !Int
+                         !(IORef [Maybe (MessageClass, SrcSpan, SDoc)])
                          !(MVar ())
 
-newLogQueue :: IO LogQueue
-newLogQueue = do
+newLogQueue :: Int -> IO LogQueue
+newLogQueue n = do
   mqueue <- newIORef []
   sem <- newMVar ()
-  return (LogQueue mqueue sem)
+  return (LogQueue n mqueue sem)
 
 finishLogQueue :: LogQueue -> IO ()
-finishLogQueue lq =
+finishLogQueue lq = do
   writeLogQueueInternal lq Nothing
 
 
 writeLogQueue :: LogQueue -> (MessageClass,SrcSpan,SDoc) -> IO ()
-writeLogQueue lq msg =
+writeLogQueue lq msg = do
   writeLogQueueInternal lq (Just msg)
 
 -- | Internal helper for writing log messages
 writeLogQueueInternal :: LogQueue -> Maybe (MessageClass,SrcSpan,SDoc) -> IO ()
-writeLogQueueInternal (LogQueue ref sem) msg = do
+writeLogQueueInternal (LogQueue n ref sem) msg = do
     atomicModifyIORef' ref $ \msgs -> (msg:msgs,())
     _ <- tryPutMVar sem ()
     return ()
@@ -98,9 +102,10 @@ parLogAction log_queue _dflags !msgClass !srcSpan !msg =
 
 -- Print each message from the log_queue using the global logger
 printLogs :: Logger -> LogQueue -> IO ()
-printLogs !logger (LogQueue ref sem) = read_msgs
+printLogs !logger (LogQueue n ref sem) = read_msgs
   where read_msgs = do
             takeMVar sem
+--            print ("READING", n)
             msgs <- atomicModifyIORef' ref $ \xs -> ([], reverse xs)
             print_loop msgs
 
