@@ -18,6 +18,7 @@ module GHC.Core.Subst (
         substTy, substCo, substExpr, substExprSC, substBind, substBindSC,
         substUnfolding, substUnfoldingSC,
         lookupIdSubst, lookupTCvSubst, substIdType, substIdOcc,
+        lookupIdSubstUnchecked,
         substTickish, substDVarSet, substIdInfo,
 
         -- ** Operations on substitutions
@@ -256,7 +257,17 @@ lookupIdSubst (Subst in_scope ids _ _) v
   | Just e  <- lookupVarEnv ids       v = e
   | Just v' <- lookupInScope in_scope v = Var v'
         -- Vital! See Note [Extending the Subst]
-  | otherwise = warnPprTrace True (text "GHC.Core.Subst.lookupIdSubst" <+> ppr v
+  | otherwise = pprPanic "lookupIdSubst" (ppr v $$ ppr in_scope)
+
+-- | Like 'lookupIdSubst', but does not panic when the variable does not exist.
+-- Do not use in new code (see #20200)
+lookupIdSubstUnchecked :: HasDebugCallStack => Subst -> Id -> CoreExpr
+lookupIdSubstUnchecked (Subst in_scope ids _ _) v
+  | not (isLocalId v) = Var v
+  | Just e  <- lookupVarEnv ids       v = e
+  | Just v' <- lookupInScope in_scope v = Var v'
+        -- Vital! See Note [Extending the Subst]
+  | otherwise = warnPprTrace True (text "GHC.Core.Subst.lookupIdSubstUnchecked" <+> ppr v
                             $$ ppr in_scope) $
                 Var v
 
