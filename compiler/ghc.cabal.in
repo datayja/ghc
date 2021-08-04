@@ -385,7 +385,6 @@ Library
         GHC.Data.StringBuffer
         GHC.Data.TrieMap
         GHC.Driver.Backend
-        GHC.Driver.Pipeline.Semaphore
         GHC.Driver.Backpack
         GHC.Driver.Backpack.Syntax
         GHC.Driver.CmdLine
@@ -410,6 +409,7 @@ Library
         GHC.Driver.Phases
         GHC.Driver.Pipeline
         GHC.Driver.Pipeline.Execute
+        GHC.Driver.Pipeline.Action
         GHC.Driver.Pipeline.Phases
         GHC.Driver.Pipeline.Monad
         GHC.Driver.Plugins

@@ -134,7 +134,6 @@ import Control.Monad
 import Control.Monad.Trans.Except ( ExceptT(..), runExceptT, throwE )
 import qualified Control.Monad.Catch as MC
 import Data.IORef
-import qualified Data.List as List
 import Data.Foldable (toList)
 import Data.Maybe
 import Data.Time
@@ -415,7 +414,7 @@ warnUnusedPackages mod_graph = do
           . unitId
 
 data BuildPlan = SingleModule ModuleGraphNode  -- A simple, single module all alone but *might* have an hs-boot file which isn't part of a cycle
-               | ResolvedCycle [ModuleGraphNode]   -- A resolved cycle, resolved by hs-boot files
+               | ResolvedCycle [ModuleGraphNode]   -- A resolved cycle, linearised by hs-boot files
                | UnresolvedCycle [ModuleGraphNode] -- An actual cycle, which wasn't resolved by hs-boot files
 
 instance Outputable BuildPlan where
@@ -473,10 +472,7 @@ load' how_much mHscMessage mod_graph = do
     checkHowMuch how_much $ do
 
     -- mg2_with_srcimps drops the hi-boot nodes, returning a
-    -- graph with cycles.  Among other things, it is used for
-    -- backing out partially complete cycles following a failed
-    -- upsweep, and for removing from hpt all the modules
-    -- not in strict downwards closure, during calls to compile.
+    -- graph with cycles. It is just used for warning about unecessary source imports.
     let mg2_with_srcimps :: [SCC ModuleGraphNode]
         mg2_with_srcimps = topSortModuleGraph True mod_graph Nothing
 
@@ -484,8 +480,13 @@ load' how_much mHscMessage mod_graph = do
     -- are definitely unnecessary, then emit a warning.
     warnUnnecessarySourceImports (filterToposortToModules mg2_with_srcimps)
 
-    -- Step 1: Compute SCCs without .hi-boot files,  to find the cycles
-    let cycle_mod_graph = topSortModuleGraph True mod_graph Nothing
+    let maybe_top_mod = case how_much of
+                          LoadUpTo m           -> Just m
+                          LoadDependenciesOf m -> Just m
+                          _                    -> Nothing
+
+    -- Step 1: Compute SCCs without .hi-boot files, to find the cycles
+    let cycle_mod_graph = topSortModuleGraph True mod_graph maybe_top_mod
 
         -- An environment mapping a module to its hs-boot file, if one exists
         boot_modules = mkModuleEnv
@@ -545,45 +546,8 @@ load' how_much mHscMessage mod_graph = do
     -- Unload everything
     liftIO $ unload interp hsc_env
 
-
-    -- We could at this point detect cycles which aren't broken by
-    -- a source-import, and complain immediately, but it seems better
-    -- to let upsweep_mods do this, so at least some useful work gets
-    -- done before the upsweep is abandoned.
-    --hPutStrLn stderr "after tsort:\n"
-    --hPutStrLn stderr (showSDoc (vcat (map ppr mg2)))
-
-    -- Now do the upsweep, calling compile for each module in
-    -- turn.  Final result is version 3 of everything.
-
-    -- Topologically sort the module graph, this time including hi-boot
-    -- nodes, and possibly just including the portion of the graph
-    -- reachable from the module specified in the 2nd argument to load.
-    -- This graph should be cycle-free.
-    let partial_mg0, partial_mg:: [SCC ModuleGraphNode]
-
-        maybe_top_mod = case how_much of
-                            LoadUpTo m           -> Just m
-                            LoadDependenciesOf m -> Just m
-                            _                    -> Nothing
-
-        partial_mg0 = topSortModuleGraph False mod_graph maybe_top_mod
-
-        -- LoadDependenciesOf m: we want the upsweep to stop just
-        -- short of the specified module
-        partial_mg
-            | LoadDependenciesOf _mod <- how_much
-            = assert (case last partial_mg0 of
-                        AcyclicSCC (ModuleNode (ExtendedModSummary ms _)) -> ms_mod_name ms == _mod
-                        _ -> False) $
-              List.init partial_mg0
-            | otherwise
-            = partial_mg0
-
-        mg = partial_mg
-
     liftIO $ debugTraceMsg logger 2 (hang (text "Ready for upsweep")
-                                    2 (ppr mg))
+                                    2 (ppr acyclic_modgraph))
 
     let transitive_deps = mkTransitiveDepsMap (mgModSummaries' mod_graph)
 
@@ -649,7 +613,7 @@ load' how_much mHscMessage mod_graph = do
                 loadFinish Failed linkresult
              else
                 loadFinish Succeeded linkresult
-{-
+    {-
      else
        -- Tricky.  We need to back out the effects of compiling any
        -- half-done cycles, both so as to clean up the top level envs
@@ -836,64 +800,6 @@ unload interp hsc_env
         LinkInMemory -> Linker.unload interp hsc_env []
         _other -> return ()
 
--- -----------------------------------------------------------------------------
-{- |
-
-  Stability tells us which modules definitely do not need to be recompiled.
-  There are two main reasons for having stability:
-
-   - avoid doing a complete upsweep of the module graph in GHCi when
-     modules near the bottom of the tree have not changed.
-
-   - to tell GHCi when it can load object code: we can only load object code
-     for a module when we also load object code for all of the imports of the
-     module.  So we need to know that we will definitely not be recompiling
-     any of these modules, and we can use the object code.
-
-  The stability check is as follows.  Both stableObject and
-  stableBCO are used during the upsweep phase later.
-
-@
-  stable m = stableObject m || stableBCO m
-
-  stableObject m =
-        all stableObject (imports m)
-        && old linkable does not exist, or is == on-disk .o
-        && date(on-disk .o) >= date(on-disk .hi)
-        && hash(on-disk .hs) == hash recorded in .hi
-
-  stableBCO m =
-        all stable (imports m)
-        && hash(on-disk .hs) == hash recorded alongside BCO
-@
-
-  These properties embody the following ideas:
-
-    - if a module is stable, then:
-
-        - if it has been compiled in a previous pass (present in HPT)
-          then it does not need to be compiled or re-linked.
-
-        - if it has not been compiled in a previous pass,
-          then we only need to read its .hi file from disk and
-          link it to produce a 'ModDetails'.
-
-    - if a modules is not stable, we will definitely be at least
-      re-linking, and possibly re-compiling it during the 'upsweep'.
-      All non-stable modules can (and should) therefore be unlinked
-      before the 'upsweep'.
-
-    - Note that objects are only considered stable if they only depend
-      on other objects.  We can't link object code against byte code.
-
-    - Note that even if an object is stable, we may end up recompiling
-      if the interface is out of date because an *external* interface
-      has changed.  The current code in GHC.Driver.Make handles this case
-      fairly poorly, so be careful.
-
-  See also Note [When source is considered modified]
--}
-
 
 {- Parallel Upsweep
  -
@@ -919,6 +825,41 @@ unload interp hsc_env
  - module graph, outputting the messages stored in each module's TQueue.
 -}
 
+{-
+
+Note [--make mode]
+
+All the main complications with --make mode come from module cycles.
+
+Step 1: Topologically sort the module graph without hs-boot files. This returns a [SCC ModuleGraphNode] which contains
+        cycles.
+Step 2: For each cycle, topologically sort the modules in the cycle *with* the relevant hs-boot files. This should
+        result in an acyclic build plan if the hs-boot files are sufficient to resolve the cycle.
+
+The output of this step is a `[BuildPlan]`, which is a topologically sorted plan for
+how to build all the modules.
+
+```
+data BuildPlan = SingleModule ModuleGraphNode  -- A simple, single module all alone but *might* have an hs-boot file which isn't part of a cycle
+               | ResolvedCycle [ModuleGraphNode]   -- A resolved cycle, linearised by hs-boot files
+               | UnresolvedCycle [ModuleGraphNode] -- An actual cycle, which wasn't resolved by hs-boot files
+```
+
+The `BuildPlan` is then interpreted by the `upsweep` function.
+
+* SingleModule nodes are compiled normally by either the upsweep_inst or upsweep_mod functions.
+* ResolvedCycles need to compiled "together" so that the information which ends up in
+  the interface files at the end is accurate (and doesn't contain temporary information from
+  the hs-boot files.)
+  - The IORef
+  - At the end of typechecking, all the interface files are typechecked again in
+    the retypecheck loop.
+
+The trickiest
+
+
+-}
+
 
 data BuildLoopState = BuildLoopState { buildDep :: M.Map NodeKey (SDoc, WrappedMakePipeline (Maybe HomeModInfo))
                                           -- The current way to build a specific TNodeKey, without cycles this just points to
@@ -926,16 +867,6 @@ data BuildLoopState = BuildLoopState { buildDep :: M.Map NodeKey (SDoc, WrappedM
                                           -- cycles there can be additional indirection and can point to `use (TypecheckLoop ...)`
                                      , nNODE :: Int
                                      }
-
-{-
-
-For the typecheck module case,
-
-TypecheckLoop ns --> Each ns in here must be compiled, so doesn't point to anything
-in particular. But the dependency of each NS could also point to another loop, so
-getting the dependencies for an N, look up in the map.
-
--}
 
 nodeId :: BuildM Int
 nodeId = do
@@ -2422,10 +2353,12 @@ actionInterpret fa =
           (k, n) = nk nbi
           lq = node_log_queue nbi
           mk_mod = case ms_hsc_src mod of
-                        HsigFile -> homeModuleInstantiation (hsc_home_unit hsc_env) (ms_mod mod)
-                        _ -> ms_mod mod
+                        HsigFile ->
+                          let mod_name = homeModuleInstantiation (hsc_home_unit hsc_env) (ms_mod mod)
+                          in mkModuleEnv . (:[]) . (mod_name,) <$> newIORef emptyTypeEnv
+                        _ -> return emptyModuleEnv -- ms_mod mod
 
-      knot_var <- liftIO $ maybe (mkModuleEnv .  (:[]) . (mk_mod ,) <$> newIORef emptyTypeEnv) return (build_node_var nbi)
+      knot_var <- liftIO $ maybe mk_mod return (build_node_var nbi)
 
       do
         deps <- unwrap (build_deps nbi)

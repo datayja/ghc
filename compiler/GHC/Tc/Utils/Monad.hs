@@ -249,7 +249,7 @@ initTc hsc_env hsc_src keep_rn_syntax mod loc do_this
         infer_var    <- newIORef True ;
         infer_reasons_var <- newIORef emptyMessages ;
         dfun_n_var   <- newIORef emptyOccSet ;
-        type_env_var <- case hsc_type_env_vars hsc_env mod of {
+        !type_env_var <- case hsc_type_env_vars hsc_env mod of {
                            Just {} -> return (hsc_type_env_vars hsc_env) ;
                            Nothing -> return (hsc_type_env_vars hsc_env) } ;
                            --Nothing -> pprTrace "miss" (ppr mod) $  mkModuleEnv . (:[]) . (mod,) <$> newIORef emptyNameEnv } ;
@@ -2076,8 +2076,8 @@ initIfaceTcRn thing_inside
                             if_rec_types =
                                 if is_instantiate
                                     then return Nothing
-                                    else fmap readTcRef <$> tcg_type_env_var tcg_env
-                            , if_type_env = readTcRef <$> tcg_type_env_var tcg_env this_mod }
+                                    else fmap readTcRef <$!> tcg_type_env_var tcg_env
+                            , if_type_env = readTcRef <$!> tcg_type_env_var tcg_env this_mod }
                          }
         ; setEnvs (if_env, ()) thing_inside }
 

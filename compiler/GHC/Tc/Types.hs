@@ -272,11 +272,11 @@ data IfGblEnv
         -- We need the module name so we can test when it's appropriate
         -- to look in this env.
         -- See Note [Tying the knot] in GHC.IfaceToCore
-        if_rec_types :: Module -> Maybe (IfG TypeEnv),
+        if_rec_types :: !(Module -> Maybe (IfG TypeEnv)),
                 -- Allows a read effect, so it can be in a mutable
                 -- variable; c.f. handling the external package type env
                 -- Nothing => interactive stuff, no loops possible
-        if_type_env :: Maybe (IfG TypeEnv) -- Get the type env for the module being currently compiled (only used by lintUnfolding)
+        if_type_env :: !(Maybe (IfG TypeEnv)) -- Get the type env for the module being currently compiled (only used by lintUnfolding)
     }
 
 data IfLclEnv
@@ -286,7 +286,7 @@ data IfLclEnv
         -- it means M.f = \x -> x, where M is the if_mod
         -- NB: This is a semantic module, see
         -- Note [Identity versus semantic module]
-        if_mod :: Module,
+        if_mod :: !Module,
 
         -- Whether or not the IfaceDecl came from a boot
         -- file or not; we'll use this to choose between
