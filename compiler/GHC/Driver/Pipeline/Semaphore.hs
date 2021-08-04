@@ -12,10 +12,6 @@ import GHC.Types.SrcLoc
 import GHC.Utils.Logger
 import qualified Control.Monad.Catch as MC
 import GHC.Utils.Outputable
-import GHC.Utils.Trace
-import Data.Maybe
-import GHC.Exts.Heap.Closures (GenClosure(threadId))
-import Foreign.Safe (Int)
 
 data ActionResult a = ActionResult { actionResult :: MVar (Maybe a) -- Where the result will end up
                                    , killAction   :: IO () -- How to kill the running action
@@ -89,7 +85,7 @@ writeLogQueue lq msg = do
 
 -- | Internal helper for writing log messages
 writeLogQueueInternal :: LogQueue -> Maybe (MessageClass,SrcSpan,SDoc) -> IO ()
-writeLogQueueInternal (LogQueue n ref sem) msg = do
+writeLogQueueInternal (LogQueue _n ref sem) msg = do
     atomicModifyIORef' ref $ \msgs -> (msg:msgs,())
     _ <- tryPutMVar sem ()
     return ()
@@ -102,7 +98,7 @@ parLogAction log_queue _dflags !msgClass !srcSpan !msg =
 
 -- Print each message from the log_queue using the global logger
 printLogs :: Logger -> LogQueue -> IO ()
-printLogs !logger (LogQueue n ref sem) = read_msgs
+printLogs !logger (LogQueue _n ref sem) = read_msgs
   where read_msgs = do
             takeMVar sem
 --            print ("READING", n)
