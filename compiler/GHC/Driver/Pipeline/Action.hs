@@ -1,6 +1,19 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE DerivingVia #-}
-module GHC.Driver.Pipeline.Semaphore where
+module GHC.Driver.Pipeline.Action (ActionResult(..)
+                                  , mkAction
+                                  , ActionMap
+                                  , emptyActionMap
+                                  , killAllActions
+                                  , queueAction
+
+                                  , LogQueue(..)
+                                  , newLogQueue
+                                  , finishLogQueue
+                                  , writeLogQueue
+                                  , parLogAction
+                                  , printLogs
+                                  ) where
 
 import GHC.Prelude
 import qualified GHC.Data.DependentMap as M
@@ -13,9 +26,11 @@ import GHC.Utils.Logger
 import qualified Control.Monad.Catch as MC
 import GHC.Utils.Outputable
 
+-- The 'Action' abstraction
+
 data ActionResult a = ActionResult { actionResult :: MVar (Maybe a) -- Where the result will end up
                                    , killAction   :: IO () -- How to kill the running action
-                                   , actionName   :: SDoc  -- For debugging
+                                   , actionName   :: SDoc  -- The name for debugging
                                    }
 
 waitResult :: ActionResult a -> IO (Maybe a)
@@ -23,13 +38,13 @@ waitResult ar = do
   rs <- readMVar (actionResult ar)
   return rs
 
-mkAction :: SDoc -> IO (Maybe a) -> IO (ActionResult a)
-mkAction name act = do
+mkAction :: SDoc -> IO () -> IO (Maybe a) -> IO (ActionResult a)
+mkAction name finaliser act = do
   res_var <- newEmptyMVar
   -- MP: There used to be a forkIOWithUnmask here, but there was not a corresponding
   -- mask so unmasking was a no-op.
   r <- forkIO $ do
-        r <- act `MC.onException` (putMVar res_var Nothing)
+        r <- (act `MC.onException` (putMVar res_var Nothing)) `MC.finally` finaliser
         putMVar res_var r
   return $ ActionResult res_var (killThread r) name
 
@@ -45,18 +60,19 @@ killAllActions =
     getKill :: ActionResult a -> IO ()
     getKill = killAction
 
-queueAction :: (Outputable (f a), M.GOrd f) => MVar (ActionMap f)
-                                            -> f a
+queueAction :: (Outputable (f a), M.GOrd f) => MVar (ActionMap f) -- ^ Started actions
+                                            -> f a   -- ^ Node Key
+                                            -> IO (r, IO ()) -- ^ Initialiser, which produces the initial value and a finaliser.
+                                            -> (r -> IO (Maybe a)) -- ^ Action to run
                                             -> IO (Maybe a)
-                                            -> IO (Maybe a)
-queueAction act_var key raw_act = do
+queueAction act_var key initialiser raw_act = do
   join $ modifyMVar act_var (\m ->
     case M.lookupDepMap key m of
       Just a -> do
         return (m, waitResult a)
       Nothing -> do
---        pprTraceM "create" (ppr key)
-        wrapped_act <- mkAction (ppr key) raw_act
+        (init, finaliser) <- initialiser
+        wrapped_act <- mkAction (ppr key) finaliser (raw_act init)
         return (M.insertDepMap key wrapped_act m, waitResult wrapped_act))
 
 -- LogQueue Abstraction
@@ -101,7 +117,6 @@ printLogs :: Logger -> LogQueue -> IO ()
 printLogs !logger (LogQueue _n ref sem) = read_msgs
   where read_msgs = do
             takeMVar sem
---            print ("READING", n)
             msgs <- atomicModifyIORef' ref $ \xs -> ([], reverse xs)
             print_loop msgs
 
