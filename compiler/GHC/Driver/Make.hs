@@ -1477,12 +1477,9 @@ mkNodeMap summaries = ModNodeMap $ Map.fromList
 
 -- | Efficiently construct a map from a NodeKey to its list of transitive dependencies
 mkTransitiveDepsMap :: [ModuleGraphNode] -> M.Map NodeKey [NodeKey]
-mkTransitiveDepsMap nodes = res
-  where
-    do_one one =
-      let edges = unfilteredEdges False one
-      in ordNub $ concat (edges : mapMaybe (\mn -> M.lookup mn res) edges)
-    res = Map.fromList [(mkNodeKey mn, do_one mn) | mn <- nodes]
+mkTransitiveDepsMap nodes =
+  let (mg, lookup_node) = moduleGraphNodes False nodes
+  in Map.fromList [(mkNodeKey mn, map (mkNodeKey . node_payload) (reachableG mg (expectJust "trans_dep" (lookup_node (mkNodeKey mn))))) | mn <- nodes]
 
 -- | If there are {-# SOURCE #-} imports between strongly connected
 -- components in the topological sort, then those imports can
