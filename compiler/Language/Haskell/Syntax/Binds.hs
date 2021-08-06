@@ -46,6 +46,7 @@ import GHC.Data.Bag
 import GHC.Data.BooleanFormula (LBooleanFormula)
 
 import GHC.Utils.Outputable
+import GHC.Utils.Panic (pprPanic)
 
 import Data.Data hiding ( Fixity )
 import Data.Void
@@ -873,15 +874,19 @@ hsSigDoc (ClassOpSig _ is_deflt _ _)
  | otherwise                    = text "class method signature"
 hsSigDoc (IdSig {})             = text "id signature"
 hsSigDoc (SpecSig _ _ _ inl)
-                                = ppr inl <+> text "pragma"
-hsSigDoc (InlineSig _ _ prag)   = ppr (inlinePragmaSpec prag) <+> text "pragma"
-hsSigDoc (SpecInstSig _ src _)
-                                = pprWithSourceText src empty <+> text "instance pragma"
+                                = ppr (inlinePragmaName . inl_inline $ inl) <+> text "pragma"
+hsSigDoc (InlineSig _ _ prag)   = ppr (inlinePragmaName . inl_inline $ prag) <+> text "pragma"
+hsSigDoc (SpecInstSig _ src _)  = text (extractSpecPragName src) <+> text "instance pragma"
 hsSigDoc (FixSig {})            = text "fixity declaration"
 hsSigDoc (MinimalSig {})        = text "MINIMAL pragma"
 hsSigDoc (SCCFunSig {})         = text "SCC pragma"
 hsSigDoc (CompleteMatchSig {})  = text "COMPLETE pragma"
 hsSigDoc (XSig {})              = text "XSIG TTG extension"
+
+extractSpecPragName :: SourceText -> String
+extractSpecPragName srcTxt =  case (words $ show srcTxt) of
+     (_:_:pragName:_) -> filter (/= '\"') pragName
+     _                -> pprPanic "hsSigDoc: Misformed SPECIALISE instance pragma:" (ppr srcTxt)
 
 {-
 ************************************************************************
