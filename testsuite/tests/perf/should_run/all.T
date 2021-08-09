@@ -400,5 +400,10 @@ test ('T19474',
       compile_and_run,
       ['-v0 -O'])
 
-test('IPEPerf',[collect_stats(), only_ways(['normal'])],
-     compile_and_run, ['-finfo-table-map'])
+test('IPEPerf',
+     [collect_stats(),
+      only_ways(['normal']),
+      high_memory_usage
+     ],
+     compile_and_run,
+     ['-finfo-table-map'])
